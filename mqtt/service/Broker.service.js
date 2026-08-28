@@ -1,9 +1,17 @@
 const mqtt = require("mqtt");
 
-// Real Mosquitto broker address (not embedded anymore).
-// e.g. mqtt://mosquitto.railway.internal:1883 (private network) or
-//      mqtt://<tcp-proxy-host>:<tcp-proxy-port> (public)
+// External broker address, e.g.
+//   mqtt://localhost:1883                      (local Mosquitto)
+//   mqtts://user:pass@xxx.emqxsl.com:8883      (EMQX Cloud / TLS)
 const BROKER_URL = process.env.MQTT_BROKER_URL || "mqtt://localhost:1883";
+
+// Topic filters the listener subscribes to (comma-separated).
+// Default "#" works on Mosquitto; hosted brokers like EMQX Cloud Serverless
+// reject a root "#" subscription, so set e.g. MQTT_SUBSCRIBE_TOPICS=devices/#
+const SUBSCRIBE_TOPICS = (process.env.MQTT_SUBSCRIBE_TOPICS || "#")
+  .split(",")
+  .map((t) => t.trim())
+  .filter(Boolean);
 
 const receivedMessages = [];
 let client = null;
@@ -19,18 +27,20 @@ function startBroker() {
   });
 
   client.on("connect", () => {
-    console.log(`Broker listener connected to Mosquitto at ${BROKER_URL}`);
+    console.log(`Broker listener connected to broker at ${BROKER_URL}`);
 
-    // "#" catches every normal topic. Mosquitto excludes "$SYS/..." topics
-    // from "#" by convention, so subscribe to the stats we want separately.
-    client.subscribe("#", { qos: 0 }, (err) => {
+    client.subscribe(SUBSCRIBE_TOPICS, { qos: 0 }, (err) => {
       if (err) {
-        console.error("Failed to subscribe to '#':", err.message);
+        console.error(
+          `Failed to subscribe to ${SUBSCRIBE_TOPICS.join(", ")}:`,
+          err.message
+        );
       } else {
-        console.log("Subscribed to all topics (#)");
+        console.log(`Subscribed to: ${SUBSCRIBE_TOPICS.join(", ")}`);
       }
     });
 
+    // Broker stats ($SYS) — best effort; many hosted brokers block this.
     client.subscribe("$SYS/broker/clients/connected", (err) => {
       if (err) {
         console.error("Failed to subscribe to broker stats:", err.message);
@@ -56,11 +66,11 @@ function startBroker() {
   });
 
   client.on("reconnect", () => {
-    console.log("Broker listener reconnecting to Mosquitto...");
+    console.log("Broker listener reconnecting...");
   });
 
   client.on("close", () => {
-    console.log("Broker listener disconnected from Mosquitto");
+    console.log("Broker listener disconnected from broker");
   });
 
   client.on("error", (err) => {
