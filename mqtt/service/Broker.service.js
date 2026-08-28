@@ -1,46 +1,73 @@
-const aedes = require("aedes")();
-const net = require("net");
+const mqtt = require("mqtt");
 
-const PORT = process.env.MQTT_PORT || 1883;
+// Real Mosquitto broker address (not embedded anymore).
+// e.g. mqtt://mosquitto.railway.internal:1883 (private network) or
+//      mqtt://<tcp-proxy-host>:<tcp-proxy-port> (public)
+const BROKER_URL = process.env.MQTT_BROKER_URL || "mqtt://localhost:1883";
 
 const receivedMessages = [];
-let server = null;
+let client = null;
+let connectedClientsCount = 0;
 
 function startBroker() {
-  if (server) {
-    return server;
+  if (client) {
+    return client;
   }
 
-  server = net.createServer(aedes.handle);
-
-  aedes.on("client", (client) => {
-    console.log(`MQTT client connected: ${client.id}`);
+  client = mqtt.connect(BROKER_URL, {
+    clientId: `iotsensor-broker-listener-${Math.random().toString(16).slice(2, 10)}`,
   });
 
-  aedes.on("clientDisconnect", (client) => {
-    console.log(`MQTT client disconnected: ${client.id}`);
+  client.on("connect", () => {
+    console.log(`Broker listener connected to Mosquitto at ${BROKER_URL}`);
+
+    // "#" catches every normal topic. Mosquitto excludes "$SYS/..." topics
+    // from "#" by convention, so subscribe to the stats we want separately.
+    client.subscribe("#", { qos: 0 }, (err) => {
+      if (err) {
+        console.error("Failed to subscribe to '#':", err.message);
+      } else {
+        console.log("Subscribed to all topics (#)");
+      }
+    });
+
+    client.subscribe("$SYS/broker/clients/connected", (err) => {
+      if (err) {
+        console.error("Failed to subscribe to broker stats:", err.message);
+      }
+    });
   });
 
-  aedes.on("publish", (packet, client) => {
-    if (client) {
-      const record = {
-        topic: packet.topic,
-        message: packet.payload.toString(),
-        clientId: client.id,
-        timestamp: new Date().toISOString(),
-      };
-      receivedMessages.push(record);
-      console.log(
-        `Broker received message on topic "${record.topic}" from ${client.id}: ${record.message}`
-      );
+  client.on("message", (topic, payload) => {
+    if (topic === "$SYS/broker/clients/connected") {
+      connectedClientsCount = Number(payload.toString()) || 0;
+      return;
     }
+
+    const record = {
+      topic,
+      message: payload.toString(),
+      timestamp: new Date().toISOString(),
+    };
+    receivedMessages.push(record);
+    console.log(
+      `Broker received message on topic "${record.topic}": ${record.message}`
+    );
   });
 
-  server.listen(PORT, () => {
-    console.log(`MQTT broker listening on port ${PORT}`);
+  client.on("reconnect", () => {
+    console.log("Broker listener reconnecting to Mosquitto...");
   });
 
-  return server;
+  client.on("close", () => {
+    console.log("Broker listener disconnected from Mosquitto");
+  });
+
+  client.on("error", (err) => {
+    console.error("Broker listener connection error:", err.message);
+  });
+
+  return client;
 }
 
 function getMessages(topic) {
@@ -52,9 +79,9 @@ function getMessages(topic) {
 
 function getStatus() {
   return {
-    running: Boolean(server),
-    port: PORT,
-    connectedClients: Object.keys(aedes.clients || {}).length,
+    running: Boolean(client && client.connected),
+    brokerUrl: BROKER_URL,
+    connectedClients: connectedClientsCount,
     totalMessagesReceived: receivedMessages.length,
   };
 }
