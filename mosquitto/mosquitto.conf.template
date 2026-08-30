@@ -1,10 +1,13 @@
 # Minimal config for a Mosquitto broker deployed as its own Railway service.
 # Anonymous access is enabled for simplicity — lock this down (username_file /
 # password_file, or an ACL file) before using this with real devices/production data.
+#
+# __MQTT_PORT__ is substituted at container start (see entrypoint.sh) from the
+# MQTT_PORT Railway variable, so the port is configurable without a rebuild.
 
 # Bind IPv6 (::) so Railway private networking + TCP proxy can reach the broker.
 # On Linux this dual-stacks and also accepts IPv4.
-listener 1883 ::
+listener __MQTT_PORT__ ::
 allow_anonymous true
 
 persistence false
