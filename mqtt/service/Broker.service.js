@@ -5,6 +5,10 @@ const mqtt = require("mqtt");
 //   mqtts://user:pass@xxx.emqxsl.com:8883      (EMQX Cloud / TLS)
 const BROKER_URL = process.env.MQTT_BROKER_URL || "mqtt://localhost:1883";
 
+// Credentials can be in the URL above or supplied separately here.
+const USERNAME = process.env.MQTT_USERNAME;
+const PASSWORD = process.env.MQTT_PASSWORD;
+
 // Topic filters the listener subscribes to (comma-separated).
 // Default "#" works on Mosquitto; hosted brokers like EMQX Cloud Serverless
 // reject a root "#" subscription, so set e.g. MQTT_SUBSCRIBE_TOPICS=devices/#
@@ -22,9 +26,13 @@ function startBroker() {
     return client;
   }
 
-  client = mqtt.connect(BROKER_URL, {
+  const options = {
     clientId: `iotsensor-broker-listener-${Math.random().toString(16).slice(2, 10)}`,
-  });
+  };
+  if (USERNAME) options.username = USERNAME;
+  if (PASSWORD) options.password = PASSWORD;
+
+  client = mqtt.connect(BROKER_URL, options);
 
   client.on("connect", () => {
     console.log(`Broker listener connected to broker at ${BROKER_URL}`);
