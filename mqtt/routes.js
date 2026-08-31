@@ -18,4 +18,11 @@ router.post(
   publisherController.publishText
 );
 
+// Same as publish-text but always publishes to the "sensors/response" topic.
+router.post(
+  "/publisher/publish-response",
+  express.text({ type: () => true }),
+  publisherController.publishResponse
+);
+
 module.exports = router;

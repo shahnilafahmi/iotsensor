@@ -1,6 +1,7 @@
 const publisherService = require("../service/Publisher.service");
 
 const DEFAULT_TOPIC = process.env.MQTT_DEFAULT_TOPIC || "sensors/data";
+const RESPONSE_TOPIC = "sensors/response";
 
 async function publish(req, res) {
   const { topic, command, retain, qos } = req.body;
@@ -31,10 +32,9 @@ async function publish(req, res) {
   }
 }
 
-// Same as publish(), but the request body is the raw command string (text),
-// and it is published to the broker as a plain string (not JSON).
-// Topic comes from ?topic=... (defaults to MQTT_DEFAULT_TOPIC / "sensors/data").
-async function publishText(req, res) {
+// Reads the raw request body as a command string and publishes it to `topic`
+// as a plain string (not JSON). retain/qos can be overridden via query string.
+async function publishTextToTopic(req, res, topic) {
   let command = "";
   if (typeof req.body === "string") {
     command = req.body.trim();
@@ -49,8 +49,6 @@ async function publishText(req, res) {
       message: "request body must be a non-empty command string",
     });
   }
-
-  const topic = req.query.topic || DEFAULT_TOPIC;
 
   const options = {};
   if (req.query.retain !== undefined) {
@@ -72,7 +70,19 @@ async function publishText(req, res) {
   }
 }
 
+// Same as publish(), but the request body is the raw command string (text).
+// Topic comes from ?topic=... (defaults to MQTT_DEFAULT_TOPIC / "sensors/data").
+function publishText(req, res) {
+  return publishTextToTopic(req, res, req.query.topic || DEFAULT_TOPIC);
+}
+
+// Same as publishText(), but always publishes to the "sensors/response" topic.
+function publishResponse(req, res) {
+  return publishTextToTopic(req, res, RESPONSE_TOPIC);
+}
+
 module.exports = {
   publish,
   publishText,
+  publishResponse,
 };
