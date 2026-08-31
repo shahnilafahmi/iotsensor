@@ -100,6 +100,13 @@ async function command(req, res) {
   if (req.query.topic) options.commandTopic = req.query.topic;
   if (req.query.timeout !== undefined) options.timeoutMs = Number(req.query.timeout);
 
+  // Publishing the command onto the response topic would just echo back to us.
+  if (options.commandTopic === requestReply.RESPONSE_TOPIC) {
+    return res.status(400).json({
+      message: `command topic must differ from the response topic ("${requestReply.RESPONSE_TOPIC}") — drop the ?topic= override to use the default "${requestReply.COMMAND_TOPIC}"`,
+    });
+  }
+
   try {
     const result = await requestReply.request(cmd, options);
     res.status(200).json({ message: "ok", ...result });
