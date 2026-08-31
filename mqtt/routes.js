@@ -25,4 +25,12 @@ router.post(
   publisherController.publishResponse
 );
 
+// Request/reply: publish the text body as a command and return the device's
+// reply from the response topic (or 504 if it doesn't answer in time).
+router.post(
+  "/publisher/command",
+  express.text({ type: () => true }),
+  publisherController.command
+);
+
 module.exports = router;

@@ -1,7 +1,16 @@
 const publisherService = require("../service/Publisher.service");
+const requestReply = require("../service/RequestReply.service");
 
 const DEFAULT_TOPIC = process.env.MQTT_DEFAULT_TOPIC || "sensors/data";
 const RESPONSE_TOPIC = "sensors/response";
+
+// Pull a plain string out of a raw-text (or JSON {command}) request body.
+function readTextBody(req) {
+  if (typeof req.body === "string") return req.body.trim();
+  if (Buffer.isBuffer(req.body)) return req.body.toString("utf8").trim();
+  if (req.body && typeof req.body.command === "string") return req.body.command.trim();
+  return "";
+}
 
 async function publish(req, res) {
   const { topic, command, retain, qos } = req.body;
@@ -35,14 +44,7 @@ async function publish(req, res) {
 // Reads the raw request body as a command string and publishes it to `topic`
 // as a plain string (not JSON). retain/qos can be overridden via query string.
 async function publishTextToTopic(req, res, topic) {
-  let command = "";
-  if (typeof req.body === "string") {
-    command = req.body.trim();
-  } else if (Buffer.isBuffer(req.body)) {
-    command = req.body.toString("utf8").trim();
-  } else if (req.body && typeof req.body.command === "string") {
-    command = req.body.command.trim();
-  }
+  const command = readTextBody(req);
 
   if (!command) {
     return res.status(400).json({
@@ -81,8 +83,40 @@ function publishResponse(req, res) {
   return publishTextToTopic(req, res, RESPONSE_TOPIC);
 }
 
+// Request/reply: publish the raw text body as a command, then wait for the
+// device's answer on the response topic and return it in the HTTP response.
+//   ?topic=    command topic   (default MQTT_COMMAND_TOPIC / "sensors/data")
+//   ?timeout=  ms to wait      (default MQTT_REQUEST_TIMEOUT_MS / 5000)
+async function command(req, res) {
+  const cmd = readTextBody(req);
+
+  if (!cmd) {
+    return res.status(400).json({
+      message: "request body must be a non-empty command string",
+    });
+  }
+
+  const options = {};
+  if (req.query.topic) options.commandTopic = req.query.topic;
+  if (req.query.timeout !== undefined) options.timeoutMs = Number(req.query.timeout);
+
+  try {
+    const result = await requestReply.request(cmd, options);
+    res.status(200).json({ message: "ok", ...result });
+  } catch (err) {
+    if (err.code === "TIMEOUT") {
+      return res.status(504).json({
+        message: "Device did not respond in time",
+        error: err.message,
+      });
+    }
+    res.status(500).json({ message: "Request failed", error: err.message });
+  }
+}
+
 module.exports = {
   publish,
   publishText,
   publishResponse,
+  command,
 };

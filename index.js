@@ -11,6 +11,7 @@ const PORT = process.env.PORT || 3000;
 const RAW_TEXT_PATHS = [
   "/api/mqtt/publisher/publish-text",
   "/api/mqtt/publisher/publish-response",
+  "/api/mqtt/publisher/command",
 ];
 
 const jsonParser = express.json();
