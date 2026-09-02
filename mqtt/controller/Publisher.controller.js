@@ -122,13 +122,13 @@ async function command(req, res) {
   }
 }
 
-// Same as command(), but the reply topic is supplied by the caller so the
-// frontend can target a specific device, e.g.
+// Same as command(), but the caller picks the device via ?topic=, e.g.
 //   /publisher/command-dynamic?topic=device1/response
-//   ?topic=     topic to listen on for the device's reply (REQUIRED)
+//   /publisher/command-dynamic?topic=device2/response
+// ?topic= is the reply topic the backend listens on. The command is published
+// to the sibling ".../data" topic (device1/response -> device1/data), so the
+// same device id drives both sides.
 //   ?timeout=   ms to wait (default MQTT_REQUEST_TIMEOUT_MS / 5000)
-// The command itself is published to the configured command topic
-// (MQTT_COMMAND_TOPIC / "sensors/data"), same as /publisher/command.
 async function commandDynamic(req, res) {
   const cmd = readTextBody(req);
 
@@ -142,19 +142,25 @@ async function commandDynamic(req, res) {
 
   if (!responseTopic) {
     return res.status(400).json({
-      message: "topic query parameter is required (the device reply topic)",
+      message: "topic query parameter is required, e.g. ?topic=device1/response",
     });
   }
+
+  const slash = responseTopic.lastIndexOf("/");
+  const commandTopic =
+    slash === -1
+      ? `${responseTopic}/data`
+      : `${responseTopic.slice(0, slash)}/data`;
 
   // Publishing the command onto the topic we're listening on would just echo
   // straight back to us.
-  if (responseTopic === requestReply.COMMAND_TOPIC) {
+  if (responseTopic === commandTopic) {
     return res.status(400).json({
-      message: `topic must differ from the command topic ("${requestReply.COMMAND_TOPIC}")`,
+      message: `topic must not be the command topic itself ("${commandTopic}")`,
     });
   }
 
-  const options = { commandTopic: requestReply.COMMAND_TOPIC, responseTopic };
+  const options = { commandTopic, responseTopic };
   if (req.query.timeout !== undefined) options.timeoutMs = Number(req.query.timeout);
 
   try {

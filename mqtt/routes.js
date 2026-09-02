@@ -33,8 +33,8 @@ router.post(
   publisherController.command
 );
 
-// Same as /publisher/command but the reply topic is caller-supplied:
-// /publisher/command-dynamic?topic=device1/response
+// Per-device request/reply: ?topic=device1/response listens on device1/response
+// and publishes the command to device1/data.
 router.post(
   "/publisher/command-dynamic",
   express.text({ type: () => true }),
