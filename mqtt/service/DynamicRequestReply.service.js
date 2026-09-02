@@ -5,9 +5,13 @@ const USERNAME = process.env.MQTT_USERNAME;
 const PASSWORD = process.env.MQTT_PASSWORD;
 const DEFAULT_TIMEOUT_MS = Number(process.env.MQTT_REQUEST_TIMEOUT_MS || 5000);
 
+// If the SUBACK is slow, publish the command anyway after this grace period so a
+// request can never stall longer than its own timeout.
+const SUBSCRIBE_GRACE_MS = 1500;
+
 let client = null;
 
-// responseTopic -> resolver for the request currently waiting on that topic.
+// exact responseTopic -> resolver for the request currently waiting on it.
 const waiters = new Map();
 
 function getClient() {
@@ -15,6 +19,7 @@ function getClient() {
 
   const options = {
     clientId: `iotsensor-dyn-reqrep-${Math.random().toString(16).slice(2, 10)}`,
+    reconnectPeriod: 2000,
   };
   if (USERNAME) options.username = USERNAME;
   if (PASSWORD) options.password = PASSWORD;
@@ -34,75 +39,73 @@ function getClient() {
   return client;
 }
 
-function whenConnected(c) {
-  return new Promise((resolve) => {
-    if (c.connected) return resolve();
-    const started = Date.now();
-    const iv = setInterval(() => {
-      if (c.connected || Date.now() - started > 4000) {
-        clearInterval(iv);
-        resolve();
-      }
-    }, 50);
-  });
+function once(fn) {
+  let called = false;
+  return (...args) => {
+    if (called) return;
+    called = true;
+    fn(...args);
+  };
 }
 
-async function doRequest(command, commandTopic, responseTopic, timeoutMs) {
-  const c = getClient();
-  await whenConnected(c);
-
-  await new Promise((resolve, reject) => {
-    c.subscribe(responseTopic, { qos: 1 }, (err) =>
-      err ? reject(err) : resolve()
-    );
-  });
-
+// One round-trip. Every exit path goes through finish(), which clears the timer,
+// drops the waiter and unsubscribes — nothing here can hang past timeoutMs.
+function doRequest(command, commandTopic, responseTopic, timeoutMs) {
   return new Promise((resolve, reject) => {
-    let done = false;
+    const c = getClient();
 
-    const finish = (fn) => {
-      if (done) return;
-      done = true;
+    const finish = once((err, value) => {
       clearTimeout(timer);
+      clearTimeout(grace);
       waiters.delete(responseTopic);
-      c.unsubscribe(responseTopic, () => {});
-      fn();
-    };
+      try {
+        c.unsubscribe(responseTopic, () => {});
+      } catch (_) {
+        /* ignore */
+      }
+      if (err) reject(err);
+      else resolve(value);
+    });
 
     const timer = setTimeout(() => {
-      finish(() =>
-        reject(
-          Object.assign(
-            new Error(`No reply on "${responseTopic}" within ${timeoutMs}ms`),
-            { code: "TIMEOUT" }
-          )
+      finish(
+        Object.assign(
+          new Error(`No reply on "${responseTopic}" within ${timeoutMs}ms`),
+          { code: "TIMEOUT" }
         )
       );
     }, timeoutMs);
 
     waiters.set(responseTopic, (text) =>
-      finish(() =>
-        resolve({
-          command,
-          commandTopic,
-          responseTopic,
-          response: text.trim(),
-        })
-      )
+      finish(null, {
+        command,
+        commandTopic,
+        responseTopic,
+        response: text.trim(),
+      })
     );
 
-    c.publish(commandTopic, command, { qos: 1, retain: false }, (err) => {
-      if (err) finish(() => reject(err));
+    const publish = once(() => {
+      c.publish(commandTopic, command, { qos: 1, retain: false }, (err) => {
+        if (err) finish(err);
+      });
+    });
+
+    // Publish once the SUBACK lands, or after a short grace, whichever is first:
+    // we don't want to miss a fast reply, but we also must not wait forever.
+    const grace = setTimeout(publish, SUBSCRIBE_GRACE_MS);
+    c.subscribe(responseTopic, { qos: 1 }, (err) => {
+      if (err) return finish(err);
+      publish();
     });
   });
 }
 
 // The device gives plain string answers with no correlation id, so requests are
-// serialised: only one round-trip happens at a time regardless of topic.
+// serialised: one round-trip at a time regardless of topic. A rejection in one
+// request does not block the next (the chain swallows both outcomes).
 let chain = Promise.resolve();
 
-// Publishes `command` to `commandTopic` and resolves with the next reply seen on
-// the caller-supplied `responseTopic`, or rejects with code "TIMEOUT".
 function request(
   command,
   { commandTopic, responseTopic, timeoutMs = DEFAULT_TIMEOUT_MS } = {}
