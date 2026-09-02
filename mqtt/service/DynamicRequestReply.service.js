@@ -5,8 +5,12 @@ const USERNAME = process.env.MQTT_USERNAME;
 const PASSWORD = process.env.MQTT_PASSWORD;
 const DEFAULT_TIMEOUT_MS = Number(process.env.MQTT_REQUEST_TIMEOUT_MS || 5000);
 
-// If the SUBACK is slow, publish the command anyway after this grace period so a
-// request can never stall longer than its own timeout.
+// After subscribing, wait briefly before publishing the command so the broker's
+// retained message / backlog for the topic arrives first and gets discarded.
+const RETAINED_DRAIN_MS = 200;
+
+// If the SUBACK never comes, publish anyway after this so a request can never
+// stall longer than its own timeout.
 const SUBSCRIBE_GRACE_MS = 1500;
 
 let client = null;
@@ -27,9 +31,8 @@ function getClient() {
   client = mqtt.connect(BROKER_URL, options);
 
   client.on("message", (topic, payload, packet) => {
-    if (packet.retain) return; // ignore stale retained value
-    const resolve = waiters.get(topic);
-    if (resolve) resolve(payload.toString());
+    const waiter = waiters.get(topic);
+    if (waiter) waiter(payload.toString(), packet.retain);
   });
 
   client.on("error", (err) => {
@@ -54,9 +57,12 @@ function doRequest(command, commandTopic, responseTopic, timeoutMs) {
   return new Promise((resolve, reject) => {
     const c = getClient();
 
+    let drain = null;
+
     const finish = once((err, value) => {
       clearTimeout(timer);
       clearTimeout(grace);
+      clearTimeout(drain);
       waiters.delete(responseTopic);
       try {
         c.unsubscribe(responseTopic, () => {});
@@ -76,27 +82,34 @@ function doRequest(command, commandTopic, responseTopic, timeoutMs) {
       );
     }, timeoutMs);
 
-    waiters.set(responseTopic, (text) =>
+    // Only a message that lands *after* we send the command counts as the reply.
+    // Anything already on the topic — a retained value, or telemetry the device
+    // streams independently — is ignored so it can't masquerade as an answer.
+    let commandSent = false;
+
+    waiters.set(responseTopic, (text, retained) => {
+      if (retained || !commandSent) return;
       finish(null, {
         command,
         commandTopic,
         responseTopic,
         response: text.trim(),
-      })
-    );
+      });
+    });
 
     const publish = once(() => {
+      commandSent = true;
       c.publish(commandTopic, command, { qos: 1, retain: false }, (err) => {
         if (err) finish(err);
       });
     });
 
-    // Publish once the SUBACK lands, or after a short grace, whichever is first:
-    // we don't want to miss a fast reply, but we also must not wait forever.
+    // Publish shortly after the SUBACK (letting retained/backlog drain first),
+    // or after a hard grace if the SUBACK never arrives.
     const grace = setTimeout(publish, SUBSCRIBE_GRACE_MS);
     c.subscribe(responseTopic, { qos: 1 }, (err) => {
       if (err) return finish(err);
-      publish();
+      drain = setTimeout(publish, RETAINED_DRAIN_MS);
     });
   });
 }
