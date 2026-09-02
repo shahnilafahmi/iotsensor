@@ -1,5 +1,6 @@
 const publisherService = require("../service/Publisher.service");
 const requestReply = require("../service/RequestReply.service");
+const dynamicRequestReply = require("../service/DynamicRequestReply.service");
 
 const DEFAULT_TOPIC = process.env.MQTT_DEFAULT_TOPIC || "sensors/data";
 const RESPONSE_TOPIC = "sensors/response";
@@ -121,9 +122,59 @@ async function command(req, res) {
   }
 }
 
+// Same as command(), but the reply topic is supplied by the caller so the
+// frontend can target a specific device, e.g.
+//   /publisher/command-dynamic?topic=device1/response
+//   ?topic=     topic to listen on for the device's reply (REQUIRED)
+//   ?timeout=   ms to wait (default MQTT_REQUEST_TIMEOUT_MS / 5000)
+// The command itself is published to the configured command topic
+// (MQTT_COMMAND_TOPIC / "sensors/data"), same as /publisher/command.
+async function commandDynamic(req, res) {
+  const cmd = readTextBody(req);
+
+  if (!cmd) {
+    return res.status(400).json({
+      message: "request body must be a non-empty command string",
+    });
+  }
+
+  const responseTopic = req.query.topic;
+
+  if (!responseTopic) {
+    return res.status(400).json({
+      message: "topic query parameter is required (the device reply topic)",
+    });
+  }
+
+  // Publishing the command onto the topic we're listening on would just echo
+  // straight back to us.
+  if (responseTopic === requestReply.COMMAND_TOPIC) {
+    return res.status(400).json({
+      message: `topic must differ from the command topic ("${requestReply.COMMAND_TOPIC}")`,
+    });
+  }
+
+  const options = { commandTopic: requestReply.COMMAND_TOPIC, responseTopic };
+  if (req.query.timeout !== undefined) options.timeoutMs = Number(req.query.timeout);
+
+  try {
+    const result = await dynamicRequestReply.request(cmd, options);
+    res.status(200).json({ message: "ok", ...result });
+  } catch (err) {
+    if (err.code === "TIMEOUT") {
+      return res.status(504).json({
+        message: "Device did not respond in time",
+        error: err.message,
+      });
+    }
+    res.status(500).json({ message: "Request failed", error: err.message });
+  }
+}
+
 module.exports = {
   publish,
   publishText,
   publishResponse,
   command,
+  commandDynamic,
 };

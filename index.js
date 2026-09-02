@@ -31,6 +31,7 @@ const RAW_TEXT_PATHS = [
   "/api/mqtt/publisher/publish-text",
   "/api/mqtt/publisher/publish-response",
   "/api/mqtt/publisher/command",
+  "/api/mqtt/publisher/command-dynamic",
 ];
 
 const jsonParser = express.json();

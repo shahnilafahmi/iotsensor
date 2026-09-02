@@ -33,4 +33,12 @@ router.post(
   publisherController.command
 );
 
+// Same as /publisher/command but the reply topic is caller-supplied:
+// /publisher/command-dynamic?topic=device1/response
+router.post(
+  "/publisher/command-dynamic",
+  express.text({ type: () => true }),
+  publisherController.commandDynamic
+);
+
 module.exports = router;
