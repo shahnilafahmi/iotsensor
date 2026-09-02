@@ -41,4 +41,8 @@ router.post(
   publisherController.commandDynamic
 );
 
+// Read the latest (retained) value on a topic — no command published.
+// /publisher/read?topic=device1/telemetry
+router.post("/publisher/read", publisherController.read);
+
 module.exports = router;

@@ -1,6 +1,7 @@
 const publisherService = require("../service/Publisher.service");
 const requestReply = require("../service/RequestReply.service");
 const dynamicRequestReply = require("../service/DynamicRequestReply.service");
+const retainedReader = require("../service/RetainedReader.service");
 
 const DEFAULT_TOPIC = process.env.MQTT_DEFAULT_TOPIC || "sensors/data";
 const RESPONSE_TOPIC = "sensors/response";
@@ -177,10 +178,42 @@ async function commandDynamic(req, res) {
   }
 }
 
+// Reads the latest value the broker holds on a topic (its retained message) —
+// no command is published. For polling device telemetry from the frontend, e.g.
+//   /publisher/read?topic=device1/telemetry
+//   ?topic=   topic to read (REQUIRED)
+//   ?wait=    ms to wait for the retained message (default MQTT_READ_WAIT_MS / 2000)
+async function read(req, res) {
+  const topic = req.query.topic;
+
+  if (!topic) {
+    return res.status(400).json({
+      message: "topic query parameter is required, e.g. ?topic=device1/telemetry",
+    });
+  }
+
+  const waitMs =
+    req.query.wait !== undefined ? Number(req.query.wait) : undefined;
+
+  try {
+    const result = await retainedReader.readLatest(topic, waitMs);
+    if (!result) {
+      return res.status(404).json({
+        message: `no message available on "${topic}"`,
+        topic,
+      });
+    }
+    res.status(200).json({ message: "ok", ...result });
+  } catch (err) {
+    res.status(500).json({ message: "Read failed", error: err.message });
+  }
+}
+
 module.exports = {
   publish,
   publishText,
   publishResponse,
   command,
   commandDynamic,
+  read,
 };
